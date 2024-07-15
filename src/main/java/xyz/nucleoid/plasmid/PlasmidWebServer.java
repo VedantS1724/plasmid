@@ -21,15 +21,23 @@ import java.util.Map;
 import java.util.concurrent.Executors;
 
 public class PlasmidWebServer {
+
     public static final String RESOURCE_PACKS_ENDPOINT = "resource-packs";
-
     private static final Map<String, Path> RESOURCE_PACKS = new HashMap<>();
+    private static final String WEB_URL = initializeWebUrl();
 
-    private static final String WEB_URL = Util.make(() -> {
-        var path = PlasmidConfig.get().userFacingPackAddress().orElse("");
+    private static String initializeWebUrl() {
+        var path = getPathFromConfig();
+        return formatPath(path);
+    }
+
+    private static String getPathFromConfig() {
+        return PlasmidConfig.get().userFacingPackAddress().orElse("");
+    }
+
+    private static String formatPath(String path) {
         return path.endsWith("/") ? path : path + "/";
-
-    });
+    }
 
     @Nullable
     public static HttpServer start(MinecraftServer minecraftServer, Config config) {
@@ -51,11 +59,7 @@ public class PlasmidWebServer {
 
     private static InetSocketAddress createBindAddress(MinecraftServer server, Config config) {
         var serverIp = server.getServerIp();
-        if (!Strings.isNullOrEmpty(serverIp)) {
-            return new InetSocketAddress(serverIp, config.port());
-        } else {
-            return new InetSocketAddress(config.port());
-        }
+        return Strings.isNullOrEmpty(serverIp) ? new InetSocketAddress(config.port()) : new InetSocketAddress(serverIp, config.port());
     }
 
     public static String registerResourcePack(String s, Path path) {
@@ -63,39 +67,39 @@ public class PlasmidWebServer {
         return WEB_URL + s;
     }
 
-    private record ResourcePacksHandler(String endpoint) implements HttpHandler {
+    private static class ResourcePacksHandler implements HttpHandler {
+        private final String endpoint;
+
+        public ResourcePacksHandler(String endpoint) {
+            this.endpoint = endpoint;
+        }
+
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             try (exchange) {
-                if (!this.tryHandle(exchange)) {
+                if (!tryHandle(exchange)) {
                     exchange.sendResponseHeaders(HttpStatus.SC_NOT_FOUND, 0);
                 }
             }
         }
 
         private boolean tryHandle(HttpExchange exchange) throws IOException {
-            if ("GET".equals(exchange.getRequestMethod())) {
-                return this.tryHandleGet(exchange);
-            }
-            return false;
+            return "GET".equals(exchange.getRequestMethod()) && tryHandleGet(exchange);
         }
 
         private boolean tryHandleGet(HttpExchange exchange) throws IOException {
             var path = exchange.getRequestURI().getPath().substring(this.endpoint.length() + 2);
             var pack = RESOURCE_PACKS.get(path);
+
             if (pack != null) {
                 var size = Files.size(pack);
-                try (
-                        var input = Files.newInputStream(pack);
-                        var output = exchange.getResponseBody()
-                ) {
+                try (var input = Files.newInputStream(pack); var output = exchange.getResponseBody()) {
                     exchange.getResponseHeaders().add("Server", "plasmid");
                     exchange.getResponseHeaders().add("Content-Type", "application/zip");
                     exchange.sendResponseHeaders(HttpStatus.SC_OK, size);
 
                     input.transferTo(output);
                     output.flush();
-
                     return true;
                 }
             }
@@ -112,3 +116,4 @@ public class PlasmidWebServer {
         );
     }
 }
+
